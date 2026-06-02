@@ -28,14 +28,109 @@ function parseCSV(text) {
 
 // ── Detect sibling entries (e.g. "Alfie 1" → finds "Alfie 2") ───────────────
 function getSiblings(currentName, allocations) {
-  // Strip trailing " N" to get base name (e.g. "Alfie 1" → "alfie")
   const base = currentName.trim().toLowerCase().replace(/\s+\d+$/, '');
-  // Only applies if the name actually had a number suffix
   if (base === currentName.trim().toLowerCase()) return [];
   return Object.values(allocations).filter(entry => {
     const entryBase = entry.name.toLowerCase().replace(/\s+\d+$/, '');
     return entryBase === base && entry.name.toLowerCase() !== currentName.trim().toLowerCase();
   });
+}
+
+// ── Custom autocomplete ──────────────────────────────────────────────────────
+function NameAutocomplete({ allNames, value, onChange, onSelect, onSubmit }) {
+  const [open, setOpen] = useState(false);
+  const [activeIdx, setActiveIdx] = useState(-1);
+  const containerRef = useRef(null);
+
+  const filtered = value.trim().length > 0
+    ? allNames.filter(n => n.toLowerCase().includes(value.toLowerCase()))
+    : [];
+
+  const showDropdown = open && filtered.length > 0;
+
+  // Close on outside click/tap
+  useEffect(() => {
+    function handleOutside(e) {
+      if (containerRef.current && !containerRef.current.contains(e.target)) {
+        setOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', handleOutside);
+    document.addEventListener('touchstart', handleOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleOutside);
+      document.removeEventListener('touchstart', handleOutside);
+    };
+  }, []);
+
+  function handleInput(e) {
+    onChange(e.target.value);
+    setOpen(true);
+    setActiveIdx(-1);
+  }
+
+  function handleKeyDown(e) {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setActiveIdx(i => Math.min(i + 1, filtered.length - 1));
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setActiveIdx(i => Math.max(i - 1, 0));
+    } else if (e.key === 'Enter') {
+      if (showDropdown && activeIdx >= 0) {
+        pick(filtered[activeIdx]);
+      } else {
+        setOpen(false);
+        onSubmit();
+      }
+    } else if (e.key === 'Escape') {
+      setOpen(false);
+    }
+  }
+
+  function pick(name) {
+    onSelect(name);
+    setOpen(false);
+    setActiveIdx(-1);
+  }
+
+  return (
+    <div className="autocomplete-wrap" ref={containerRef}>
+      <input
+        className="name-input"
+        type="text"
+        inputMode="text"
+        autoComplete="off"
+        autoCorrect="off"
+        autoCapitalize="words"
+        spellCheck={false}
+        placeholder="Start typing your name…"
+        value={value}
+        onChange={handleInput}
+        onFocus={() => { if (filtered.length > 0) setOpen(true); }}
+        onKeyDown={handleKeyDown}
+        maxLength={60}
+        aria-autocomplete="list"
+        aria-expanded={showDropdown}
+      />
+      {showDropdown && (
+        <ul className="autocomplete-list" role="listbox">
+          {filtered.map((name, i) => (
+            <li
+              key={name}
+              role="option"
+              aria-selected={i === activeIdx}
+              className={`autocomplete-item${i === activeIdx ? ' active' : ''}`}
+              onMouseDown={e => { e.preventDefault(); pick(name); }}
+              onTouchEnd={e => { e.preventDefault(); pick(name); }}
+            >
+              {name}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
 }
 
 // ── Team reveal card ─────────────────────────────────────────────────────────
@@ -89,7 +184,7 @@ export default function App() {
   const [loadError, setLoadError]     = useState('');
 
   const [nameInput, setNameInput]     = useState('');
-  const [phase, setPhase]             = useState('idle'); // 'idle' | 'spinning' | 'revealed'
+  const [phase, setPhase]             = useState('idle');
   const [cyclingTeam, setCyclingTeam] = useState(null);
   const [currentEntry, setCurrentEntry] = useState(null);
   const [showCard, setShowCard]       = useState(false);
@@ -159,8 +254,6 @@ export default function App() {
     runSpin(siblingEntry);
   }
 
-  function handleKey(e) { if (e.key === 'Enter') startReveal(); }
-
   function reset() {
     clearTimeout(timerRef.current);
     setPhase('idle');
@@ -172,7 +265,6 @@ export default function App() {
     setRevealedNames(new Set());
   }
 
-  // Siblings not yet revealed in this session
   const siblings = currentEntry
     ? getSiblings(currentEntry.name, allocations).filter(
         s => !revealedNames.has(s.name.toLowerCase())
@@ -214,21 +306,13 @@ export default function App() {
               <>
                 <p className="reveal-prompt">Select your name to draw from the hat 🎩</p>
                 <div className="input-row">
-                  <input
-                    className="name-input"
-                    type="text"
-                    list="names-list"
-                    placeholder="Start typing your name…"
+                  <NameAutocomplete
+                    allNames={allNames}
                     value={nameInput}
-                    onChange={e => { setNameInput(e.target.value); setNotFound(false); }}
-                    onKeyDown={handleKey}
-                    maxLength={60}
-                    autoFocus
-                    autoComplete="off"
+                    onChange={v => { setNameInput(v); setNotFound(false); }}
+                    onSelect={v => { setNameInput(v); setNotFound(false); }}
+                    onSubmit={startReveal}
                   />
-                  <datalist id="names-list">
-                    {allNames.map(n => <option key={n} value={n} />)}
-                  </datalist>
                   <button
                     className="draw-btn"
                     onClick={startReveal}
@@ -239,7 +323,7 @@ export default function App() {
                 </div>
                 {notFound && (
                   <div className="not-found">
-                    😕 <strong>"{nameInput}"</strong> wasn't found in the sweepstake. Please select your name from the list.
+                    😕 <strong>"{nameInput}"</strong> wasn't found. Please select your name from the list.
                   </div>
                 )}
               </>
